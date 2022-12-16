@@ -1,4 +1,4 @@
-name: download icons
+name: download icons verbose
 
 on: 
     workflow_dispatch:
