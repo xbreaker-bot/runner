@@ -35,7 +35,7 @@ jobs:
               run: npm install --only=prod
 
             - name: download
-              timeout-minutes: 120
+              timeout-minutes: 300
               run: node . -d work -c download  -t "${{ secrets.TELEGRAM_TOKEN }}" -m silent
 
             - name: get current date
