@@ -1,0 +1,72 @@
+name: Update cron for live
+
+on:
+    schedule:
+        - cron: '0 3 * * *'
+    workflow_dispatch:
+        # manual run
+
+jobs:
+    update:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: checkout main branch
+              uses: actions/checkout@v3.3.0
+              with:
+                repository: ${{ secrets.GOALS_REPOSITORY }}
+                ref: main
+                token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
+
+            - name: checkout work branch
+              uses: actions/checkout@v3.3.0
+              with:
+                repository: ${{ secrets.GOALS_REPOSITORY }}
+                path: work
+                ref: work
+                token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
+
+            - name: checkout runner branch
+              uses: actions/checkout@v3.3.0
+              with:
+                path: runner
+                ref: main
+                token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
+
+            - name: setup Node.js
+              uses: actions/setup-node@v3.6.0
+              with:
+                node-version: '14.17.6'
+                cache: 'npm'
+
+            - name: install dependencies
+              run: npm ci --production --ignore-scripts
+
+            - name: run cron updater
+              run: node . -d work -c cron -w "runner/.github" -t "${{ secrets.GOALS_TELEGRAM_TOKEN }}"
+
+            - name: get current date
+              id: date
+              run: echo "date=$(date +'%H:%M:%S %d.%m.%Y')" >> $GITHUB_OUTPUT
+
+            - name: commit changes to runner
+              uses: EndBug/add-and-commit@v9.1.1
+              with:
+                author_name: ${{ secrets.BOT_NAME }}
+                author_email: ${{ secrets.BOT_EMAIL }}
+                cwd: 'runner'
+                add: '.'
+                new_branch: main
+                message: 'chore(auto): update cron settings `${{ steps.date.outputs.date }}`'
+                github_token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
+
+            - name: commit changes to work
+              uses: EndBug/add-and-commit@v9.1.1
+              with:
+                author_name: ${{ secrets.BOT_NAME }}
+                author_email: ${{ secrets.BOT_EMAIL }}
+                cwd: 'work'
+                add: '.'
+                new_branch: work
+                message: 'chore(auto): update readme `${{ steps.date.outputs.date }}`'
+                github_token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
