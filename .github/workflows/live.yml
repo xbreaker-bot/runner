@@ -40,7 +40,7 @@ jobs:
 
             - name: run live events server
               timeout-minutes: 30
-              run: node . -d work -c live -t "${{ secrets.GOALS_TELEGRAM_TOKEN }}"
+              run: node . -d work -c live -t "${{ secrets.GOALS_TELEGRAM_TOKEN }}" -m 900
 
             - name: get current date
               id: date
