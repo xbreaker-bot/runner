@@ -3,7 +3,7 @@ name: Serve live events
 on: 
 #cron_start
     schedule:
-        - cron: '*/15 19-22 * * *'
+        - cron: '*/15 16-19 * * *'
 #cron_end
     workflow_dispatch:
         # manual run
