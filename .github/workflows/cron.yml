@@ -50,7 +50,7 @@ jobs:
               run: echo "date=$(date +'%H:%M:%S %d.%m.%Y')" >> $GITHUB_OUTPUT
 
             - name: commit changes to runner
-              uses: EndBug/add-and-commit@v9.1.3
+              uses: EndBug/add-and-commit@v9.1.4
               with:
                 author_name: ${{ secrets.BOT_NAME }}
                 author_email: ${{ secrets.BOT_EMAIL }}
@@ -61,7 +61,7 @@ jobs:
                 github_token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
 
             - name: commit changes to work
-              uses: EndBug/add-and-commit@v9.1.3
+              uses: EndBug/add-and-commit@v9.1.4
               with:
                 author_name: ${{ secrets.BOT_NAME }}
                 author_email: ${{ secrets.BOT_EMAIL }}
