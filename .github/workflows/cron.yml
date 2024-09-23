@@ -34,7 +34,7 @@ jobs:
                 token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
 
             - name: setup Node.js
-              uses: actions/setup-node@v4.0.3
+              uses: actions/setup-node@v4.0.4
               with:
                 node-version: '14.17.6'
                 cache: 'npm'
