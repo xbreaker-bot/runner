@@ -1,0 +1,56 @@
+name: Serve live - daily
+
+on:
+    schedule:
+        - cron: '0 6 * * *'
+    workflow_dispatch:
+        # manual run
+        
+concurrency: ci-${{ github.ref }}
+
+jobs:
+    update:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: checkout main branch
+              uses: actions/checkout@v4.2.2
+              with:
+                repository: ${{ secrets.GOALS_REPOSITORY }}
+                token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
+
+            - name: checkout work branch
+              uses: actions/checkout@v4.2.2
+              with:
+                repository: ${{ secrets.GOALS_REPOSITORY }}
+                token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
+                path: work
+                ref: work
+
+            - name: setup Node.js
+              uses: actions/setup-node@v4.1.0
+              with:
+                node-version: '14.17.6'
+                cache: 'npm'
+
+            - name: install dependencies
+              run: npm install --only=prod
+
+            - name: run live events server
+              timeout-minutes: 30
+              run: node . -d work -c live -t "${{ secrets.GOALS_TELEGRAM_TOKEN }}"
+
+            - name: get current date
+              id: date
+              run: echo "date=$(date +'%H:%M:%S %d.%m.%Y')" >> $GITHUB_OUTPUT
+
+            - name: commit changes
+              uses: EndBug/add-and-commit@v9.1.4
+              with:
+                author_name: ${{ secrets.BOT_NAME }}
+                author_email: ${{ secrets.BOT_EMAIL }}
+                cwd: 'work'
+                add: '.'
+                new_branch: work
+                message: 'chore(auto): live-daily `${{ steps.date.outputs.date }}`'
+                github_token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
