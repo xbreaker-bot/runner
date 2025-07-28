@@ -4,6 +4,10 @@ on:
     - cron: '0 1 * * *'
   workflow_dispatch:
       # manual run
+  workflow_run:
+    workflows: ["Update leagues","Certs update"]
+    types:
+      - completed
 
 jobs:
   del_runs:
