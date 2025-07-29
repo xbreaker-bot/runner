@@ -1,0 +1,239 @@
+name: Certs update
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+    # manual run
+
+env:
+  DO_API_KEY: ${{ secrets.ENV_CERTBOT_DO_API_KEY }}
+  EMAIL: ${{ secrets.ENV_CERTBOT_EMAIL }}
+  PASS: ${{ secrets.ENV_CERTBOT_PASS }}
+
+jobs:
+  check-secret:
+    name: Check secrets before run
+    runs-on: ubuntu-latest
+    outputs:
+      env: ${{ steps.check-env.outputs.defined }}
+    steps:
+      - name: Check
+        id: check-env
+        if: ${{ env.DO_API_KEY != '' && env.EMAIL != '' && env.PASS != '' }}
+        run: echo "defined=true" >> $GITHUB_OUTPUT
+  generate-matrix:
+    name: Generate matrix
+    needs: check-secret
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    if: needs.check-secret.outputs.env == 'true'
+    steps:
+      - name: Checkout current repo
+        uses: actions/checkout@v4.2.0
+        with:
+          repository: ${{ secrets.ENV_REPOSITORY }}
+          ref: main
+          token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
+
+      - name: Set matrix for build
+        id: set-matrix
+        run: |
+          # Convert settings.json with jq
+          # https://stackoverflow.com/q/59977364
+          # https://jqplay.org/s/segC5Vbppp
+
+          export JSON=$( jq -c '{include:map(select(.updated | . == null or fromdate + (86400 * 61) < now))}' ./certs/settings.json )
+          echo "$JSON"
+          
+          # Set output
+          echo "matrix=$( echo $JSON )" >> $GITHUB_OUTPUT
+  update:
+    name: ${{ matrix.workflow }}
+    needs: generate-matrix
+    if: needs.generate-matrix.outputs.matrix != '{"include":[]}'
+    strategy:
+      matrix: ${{fromJson(needs.generate-matrix.outputs.matrix)}}
+      max-parallel: 1
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Add mask
+        run: |
+          echo "::add-mask::${{ matrix.name }}" 
+          
+      - name: Checkout current repo
+        uses: actions/checkout@v4.2.0
+        with:
+          ref: main
+          token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
+
+      - name: Prepare directories
+        run: |
+          # Create dirs
+          mkdir ./work
+          mkdir ./work/${{ matrix.name }}
+          mkdir ./work/${{ matrix.name }}/conf
+          mkdir ./work/${{ matrix.name }}/work
+          mkdir ./work/${{ matrix.name }}/log
+          mkdir -p ./certs/${{ matrix.name }}
+          #find .
+
+      - name: Prepare domains
+        id: domains
+        run: |
+          # Create comma-separated string from array
+          export DOMAINARRAY=$(cat <<-END
+              ${{ toJSON(matrix.domains) }}
+          END
+          )
+          export DOMAIN=$( jq '. | join(",")' <<< "$DOMAINARRAY" )
+          echo "$DOMAIN"
+
+          # Set output
+          echo "domains=$( echo $DOMAIN )" >> $GITHUB_OUTPUT
+
+      - name: Prepare DigitalOcean token
+        run: |
+          # Create file with DigitalOcean creds
+          echo "dns_digitalocean_token = ${{ env.DO_API_KEY }}" >> /tmp/do_token.ini
+
+      - name: Add extra params for cert      
+        id: params
+        run: |
+          # Create params
+          PARAMS=""
+          if [ "${{ matrix.key }}" != "" ]; then
+            PARAMS="--key-type ${{ matrix.key }}"
+
+            if [ "${{ matrix.key-size }}" != "" ]; then
+              PARAMS="${PARAMS} --rsa-key-size ${{ matrix.key-size }}"
+            fi
+          fi
+
+          if [ "${{ matrix.csr }}" != "" ]; then
+            PARAMS="${PARAMS} --csr ./certs/${{ matrix.name }}/${{ matrix.csr }}"
+            # Certificates created using --csr need additional dirs
+            mkdir ./work/${{ matrix.name }}/conf/live
+            mkdir ./work/${{ matrix.name }}/conf/live/${{ matrix.name }}
+            PARAMS="${PARAMS} --cert-path ./work/${{ matrix.name }}/conf/live/${{ matrix.name }}/cert.pem"
+            PARAMS="${PARAMS} --fullchain-path ./work/${{ matrix.name }}/conf/live/${{ matrix.name }}/fullchain.pem"
+
+            echo "encrypt=false" >> $GITHUB_OUTPUT
+          else
+            echo "encrypt=true" >> $GITHUB_OUTPUT
+          fi
+          echo "$PARAMS"
+
+          # Set output
+          echo "params=$( echo $PARAMS )" >> $GITHUB_OUTPUT
+      
+      # https://snapcraft.io/docs/installing-snapd
+      - name: Setup snapd
+        timeout-minutes: 3
+        run: |
+          sudo apt install -y snapd
+          sudo snap install core
+          sudo snap refresh core
+
+      - name: Setup certbot
+        run: |
+          sudo snap install --classic certbot
+          sudo snap set certbot trust-plugin-with-root=ok
+          sudo snap install certbot-dns-digitalocean
+      
+      # https://certbot.eff.org/instructions
+      # https://eff-certbot.readthedocs.io/en/stable/intro.html
+      - name: Run certbot
+        run: sudo certbot certonly
+          --domains ${{ steps.domains.outputs.domains }}
+          --agree-tos
+          --cert-name ${{ matrix.name }}
+          --preferred-challenges=dns
+          --dns-digitalocean
+          --dns-digitalocean-credentials /tmp/do_token.ini
+          --dns-digitalocean-propagation-seconds 30
+          --email ${{ env.EMAIL }}
+          --work-dir ./work/${{ matrix.name }}/work
+          --logs-dir ./work/${{ matrix.name }}/log
+          --config-dir ./work/${{ matrix.name }}/conf
+          ${{ steps.params.outputs.params }}
+
+      - name: Copy certs file from certbot to certs
+        working-directory: ./
+        run: |
+          sudo chmod -R 777 ./work/${{ matrix.name }}/conf/live
+          sudo rm -f ./certs/${{ matrix.name }}/*.pem ./certs/${{ matrix.name }}/*.enc
+          sudo cp ./work/${{ matrix.name }}/conf/live/${{ matrix.name }}/fullchain.pem ./certs/${{ matrix.name }}/fullchain.pem
+          sudo cp ./work/${{ matrix.name }}/conf/live/${{ matrix.name }}/cert.pem ./certs/${{ matrix.name }}/cert.pem
+          if [ "${{ matrix.csr }}" == "" ]; then
+            sudo cp ./work/${{ matrix.name }}/conf/live/${{ matrix.name }}/privkey.pem ./certs/${{ matrix.name }}/privkey.pem
+            sudo cp ./work/${{ matrix.name }}/conf/live/${{ matrix.name }}/chain.pem ./certs/${{ matrix.name }}/chain.pem
+          fi
+
+          sudo chmod -R 777 ./certs/${{ matrix.name }}
+
+          # sudo find ./work
+          # sudo find ./certs
+          # ls -lah ./certs/${{ matrix.name }}
+
+      - name: Create ${{ matrix.name }} tar
+        run: |
+          # Create encrypted tar
+          # https://linuxconfig.org/how-to-create-compressed-encrypted-archives-with-tar-and-gpg
+          tar -cvzf ${{ matrix.name }}.tar.gz -C ./certs/${{ matrix.name }} .
+      
+      # openssl -md sha256 https://stackoverflow.com/q/34304570
+      - name: Encrypt ${{ matrix.name }} tar
+        run: openssl enc -aes-256-cbc -salt -md sha256
+          -in ./${{ matrix.name }}.tar.gz 
+          -out ./certs/${{ matrix.name }}/${{ matrix.name }}.tar.gz.enc
+          -k ${{ env.PASS }}
+
+      - name: Encrypt ${{ matrix.name }} private key
+        if: steps.params.outputs.encrypt == 'true'
+        run: openssl enc -aes-256-cbc -salt -md sha256
+          -in ./certs/${{ matrix.name }}/privkey.pem
+          -out ./certs/${{ matrix.name }}/privkey.pem.enc
+          -k ${{ env.PASS }}
+          
+      - name: Cleanup
+        run: |
+          # Delete unnecessary created files
+          sudo rm -f /tmp/do_token.ini
+          sudo rm -rf ./work
+          sudo rm -f ./${{ matrix.name }}.tar.gz
+          if [ "${{ matrix.csr }}" != "" ]; then
+            sudo rm -f ./*.pem
+          else
+            sudo rm -f ./certs/${{ matrix.name }}/privkey.pem
+          fi
+          mv ./certs/${{ matrix.name }}/${{ matrix.name }}.tar.gz.enc ./certs/${{ matrix.name }}/latest.tar.gz.enc
+
+      - name: Update setting.json for ${{ matrix.name }}
+        run: | 
+          # Use jq to update .updated field
+          # https://stackoverflow.com/q/29772676
+          jq --arg datum "$(date +%FT%TZ)" '(.[] | select(.name == "${{ matrix.name }}") | .updated) |= $datum' ./certs/settings.json >> ./certs/settings.json.tmp
+          rm -f ./certs/settings.json
+          mv ./certs/settings.json.tmp ./certs/settings.json
+          
+          # find ./certs
+
+      - name: Get commit params
+        id: commit-params
+        run: |
+          # Create commit params
+          echo "date=$(date +'%F %T')" >> $GITHUB_OUTPUT
+          # Author & email from last commit
+          echo "author=$(git log -n 1 --pretty=format:%an)" >> $GITHUB_OUTPUT
+          echo "email=$(git log -n 1 --pretty=format:%ae)" >> $GITHUB_OUTPUT
+
+      - name: Commit changes
+        uses: EndBug/add-and-commit@v9.1.4
+        with:
+          author_name: ${{ steps.commit-params.outputs.author }}
+          author_email: ${{ steps.commit-params.outputs.email }}
+          add: './certs'
+          new_branch: main
+          message: 'chore(auto): new certs `${{ matrix.name }}` at `${{ steps.commit-params.outputs.date }}`'
+          github_token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN  }}
