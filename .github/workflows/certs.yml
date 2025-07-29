@@ -44,7 +44,7 @@ jobs:
           # https://jqplay.org/s/segC5Vbppp
 
           export JSON=$( jq -c '{include:map(select(.updated | . == null or fromdate + (86400 * 61) < now))}' ./certs/settings.json )
-          echo "$JSON"
+          # echo "$JSON"
           
           # Set output
           echo "matrix=$( echo $JSON )" >> $GITHUB_OUTPUT
