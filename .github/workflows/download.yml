@@ -12,13 +12,13 @@ jobs:
 
         steps:
             - name: checkout main branch
-              uses: actions/checkout@v4.2.2
+              uses: actions/checkout@v5.0.0
               with:
                 repository: ${{ secrets.ICONS_REPOSITORY }}
                 token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
 
             - name: checkout work branch
-              uses: actions/checkout@v4.2.2
+              uses: actions/checkout@v5.0.0
               with:
                 repository: ${{ secrets.ICONS_REPOSITORY }}
                 token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
