@@ -38,6 +38,7 @@ jobs:
           mkdir -p ansible/vars
           cat > ansible/vars/vault.yml << EOF
           proxmox_host: ${{ secrets.ENV_PROXMOX_HOST }}
+          proxmox_port: ${{ secrets.ENV_PROXMOX_PORT }}
           proxmox_api_user: ${{ secrets.ENV_PROXMOX_USER }}
           proxmox_api_token_id: ${{ secrets.ENV_PROXMOX_TOKEN_ID }}
           proxmox_api_token_secret: ${{ secrets.ENV_PROXMOX_TOKEN_SECRET }}
