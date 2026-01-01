@@ -58,7 +58,8 @@ jobs:
           ansible-playbook playbook.yml \
             -e "proxmox_host=$PROXMOX_HOST" \
             -e "proxmox_node=$PROXMOX_NODE" \
-            -i inventory/proxmox.yml
+            -i inventory/proxmox.yml \
+            -vvvv
 
       - name: Clean up vault file
         if: always()
