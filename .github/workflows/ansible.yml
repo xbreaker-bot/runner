@@ -43,6 +43,7 @@ jobs:
           proxmox_api_token_id: ${{ secrets.ENV_PROXMOX_TOKEN_ID }}
           proxmox_api_token_secret: ${{ secrets.ENV_PROXMOX_TOKEN_SECRET }}
           postgres_password: ${{ secrets.ENV_POSTGRES_PASSWORD }}
+          proxmox_ssh_private_key: ${{ secrets.ENV_PROXMOX_SSH_PRIVATE_KEY }}
           EOF
 
       - name: Run Ansible playbook
@@ -56,9 +57,6 @@ jobs:
           ANSIBLE_COLLECTIONS_PATH: ${{ env.ANSIBLE_COLLECTIONS_PATH }}
           PROXMOX_VALIDATE_CERTS: false
         run: |
-          # openssl s_client -connect $PROXMOX_HOST:$PROXMOX_PORT -tls1_2
-          # openssl s_client -connect $PROXMOX_HOST:$PROXMOX_PORT -tls1_3
-          # openssl s_client -connect $PROXMOX_HOST:$PROXMOX_PORT -ssl3
           cd ansible
           ansible-playbook playbook.yml \
             -e "proxmox_host=$PROXMOX_HOST" \
