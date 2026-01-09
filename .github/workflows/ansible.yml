@@ -33,6 +33,14 @@ jobs:
           mkdir -p $ANSIBLE_COLLECTIONS_PATH
           ansible-galaxy collection install -r ansible/requirements.yml -p $ANSIBLE_COLLECTIONS_PATH
 
+      - name: Prepare hash
+        id: hashed_password
+        env:
+          PROXMOX_PGBACKWEBPASS: ${{ secrets.ENV_PROXMOX_PGBACKWEBPASS }}
+        run: |
+          HASHED_PASSWORD=$(python ansible/files/bcrypt_hash.py <<< "$PROXMOX_PGBACKWEBPASS")
+          echo "pgbackwebpass=$HASHED_PASSWORD" >> $GITHUB_OUTPUT
+
       - name: Create vault file from secrets
         run: |
           mkdir -p ansible/vars
@@ -44,6 +52,7 @@ jobs:
           proxmox_api_token_secret: ${{ secrets.ENV_PROXMOX_TOKEN_SECRET }}
           postgres_password: ${{ secrets.ENV_POSTGRES_PASSWORD }}
           proxmox_ssh_private_key: ${{ secrets.ENV_PROXMOX_SSH_PRIVATE_KEY }}
+          pgbackweb_password_hash: '${{ steps.hashed_password.outputs.pgbackwebpass }}'
           EOF
 
       - name: Run Ansible playbook
