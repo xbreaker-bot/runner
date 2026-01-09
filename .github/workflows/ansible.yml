@@ -39,7 +39,7 @@ jobs:
           PROXMOX_PGBACKWEBPASS: ${{ secrets.ENV_PROXMOX_PGBACKWEBPASS }}
         run: |
           HASHED_PASSWORD=$(python ansible/files/bcrypt_hash.py <<< "$PROXMOX_PGBACKWEBPASS")
-          sed -i "s/'HASH_VAR'/'$HASHED_PASSWORD'/g" ansible/files/pgbackweb_init.sql
+          sed -i "s|'HASH_VAR'|'$HASHED_PASSWORD'|g" ansible/files/pgbackweb_init.sql
 
       - name: Create vault file from secrets
         run: |
