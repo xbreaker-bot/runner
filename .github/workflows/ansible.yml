@@ -41,6 +41,14 @@ jobs:
           HASHED_PASSWORD=$(python ansible/files/bcrypt_hash.py <<< "$PROXMOX_PGBACKWEBPASS")
           sed -i "s|'HASH_VAR'|'$HASHED_PASSWORD'|g" ansible/files/pgbackweb_init.sql
 
+      - name: Prepare certs
+        run: |
+          mkdir -p ansible/certs
+          cp certs/${{ secrets.ENV_PROXMOX_DOMAIN }}/cert.pem ansible/certs/${{ secrets.ENV_PROXMOX_DOMAIN }}.crt
+          cp certs/${{ secrets.ENV_PROXMOX_DOMAIN }}/privkey.pem.enc ansible/certs/${{ secrets.ENV_PROXMOX_DOMAIN }}.key.enc
+          openssl enc -aes-256-cbc -salt -d -md sha256 -in ansible/certs/${{ secrets.ENV_PROXMOX_DOMAIN }}.key.enc -out ansible/certs/${{ secrets.ENV_PROXMOX_DOMAIN }}.key -k ${{ secrets.ENV_CERTBOT_PASS }} 
+          rm -f ansible/certs/50-main.key.enc
+
       - name: Create vault file from secrets
         run: |
           mkdir -p ansible/vars
@@ -74,7 +82,9 @@ jobs:
 
       - name: Clean up vault file
         if: always()
-        run: rm -f ansible/vars/vault.yml
+        run: |
+          rm -f ansible/vars/vault.yml
+          rm -rf ansible/certs
 
       - name: Handle deployment failure
         if: failure()
