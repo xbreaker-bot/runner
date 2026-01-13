@@ -60,6 +60,7 @@ jobs:
           proxmox_api_token_secret: ${{ secrets.ENV_PROXMOX_TOKEN_SECRET }}
           postgres_password: ${{ secrets.ENV_POSTGRES_PASSWORD }}
           proxmox_ssh_private_key: ${{ secrets.ENV_PROXMOX_SSH_PRIVATE_KEY }}
+          certbot_pass: ${{ secrets.ENV_CERTBOT_PASS }}
           EOF
 
       - name: Run Ansible playbook
