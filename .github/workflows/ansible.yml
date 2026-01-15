@@ -76,8 +76,6 @@ jobs:
         run: |
           cd ansible
           ansible-playbook playbook.yml \
-            -e "proxmox_host=$PROXMOX_HOST" \
-            -e "proxmox_node=$PROXMOX_NODE" \
             -i inventory/proxmox.yml \
             -vvvv
 
@@ -107,3 +105,22 @@ jobs:
           echo "4. PostgreSQL healthcheck failed"
           echo "5. Invalid credentials or permissions"
           exit 1
+
+      - name: Get commit params
+        id: commit-params
+        run: |
+          # Create commit params
+          echo "date=$(date +'%F %T')" >> $GITHUB_OUTPUT
+          # Author & email from last commit
+          echo "author=$(git log -n 1 --pretty=format:%an)" >> $GITHUB_OUTPUT
+          echo "email=$(git log -n 1 --pretty=format:%ae)" >> $GITHUB_OUTPUT
+
+      - name: Commit changes
+        uses: EndBug/add-and-commit@v9.1.4
+        with:
+          author_name: ${{ steps.commit-params.outputs.author }}
+          author_email: ${{ steps.commit-params.outputs.email }}
+          add: './ansible'
+          new_branch: ansible-postgres
+          message: 'chore(ansible): ansible action run at `${{ steps.commit-params.outputs.date }}`'
+          github_token: ${{ secrets.GITHUB_TOKEN  }}
