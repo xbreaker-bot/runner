@@ -27,6 +27,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r ansible/requirements.txt
+          apt install -y yq
 
       - name: Install required collections
         run: |
@@ -120,7 +121,7 @@ jobs:
         with:
           author_name: ${{ steps.commit-params.outputs.author }}
           author_email: ${{ steps.commit-params.outputs.email }}
-          add: './ansible'
+          add: './ansible/settings.yml'
           new_branch: ansible-postgres
           message: 'chore(ansible): ansible action run at `${{ steps.commit-params.outputs.date }}`'
           github_token: ${{ secrets.GITHUB_TOKEN  }}
