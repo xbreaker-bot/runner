@@ -34,9 +34,7 @@ jobs:
               id: meta
               uses: docker/metadata-action@v5.5.1
               with:
-                images: ghcr.io/xbreaker-bot/pgbackweb
-                tags: |
-                  type=semver,pattern={{version}}
+                images: ghcr.io/xbreaker/pgbackweb
 
             - name: Build and push Docker image
               id: build-and-push
