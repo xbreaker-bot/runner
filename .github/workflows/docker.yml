@@ -35,13 +35,17 @@ jobs:
               uses: docker/metadata-action@v5.5.1
               with:
                 images: ghcr.io/xbreaker/pgbackweb
+                labels: |
+                    org.opencontainers.image.source=https://github.com/xbreaker/pgbackweb
+                    org.opencontainers.image.url=https://github.com/xbreaker/pgbackweb
 
             - name: Build and push Docker image
               id: build-and-push
               uses: docker/build-push-action@v6.18.0
               with:
                 platforms: linux/amd64,linux/arm64
-                context: k8s/octoprint/octoprint-image
+                context: .
+                file: docker/Dockerfile
                 push: true
                 tags: ${{ steps.meta.outputs.tags }}
                 labels: ${{ steps.meta.outputs.labels }}
