@@ -34,7 +34,7 @@ jobs:
               id: meta
               uses: docker/metadata-action@v5.5.1
               with:
-                images: ghcr.io/xbreaker/pgbackweb
+                images: ghcr.io/xbreaker-bot/pgbackweb
                 labels: |
                     org.opencontainers.image.source=https://github.com/xbreaker/pgbackweb
                     org.opencontainers.image.url=https://github.com/xbreaker/pgbackweb
