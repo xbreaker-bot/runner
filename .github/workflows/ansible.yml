@@ -62,7 +62,7 @@ jobs:
           postgres_password: ${{ secrets.ENV_POSTGRES_PASSWORD }}
           proxmox_ssh_private_key: ${{ secrets.ENV_PROXMOX_SSH_PRIVATE_KEY }}
           certbot_pass: ${{ secrets.ENV_CERTBOT_PASS }}
-          pgadmin_password: ${{ secrets.ENV_PGADMIN_PASSWORD }}
+          gitea_admin_password: ${{ secrets.ENV_GITEA_PASSWORD }}
           EOF
 
       - name: Run Ansible playbook
