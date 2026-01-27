@@ -1,0 +1,90 @@
+name: Save executions
+
+on:
+  workflow_dispatch:
+
+env:
+  ANSIBLE_COLLECTIONS_PATH: /tmp/collections
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5.0.0
+        with:
+          repository: ${{ secrets.ENV_REPOSITORY }}
+          ref: ansible-postgres
+          token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
+
+      - name: Checkout events branch
+        uses: actions/checkout@v5.0.0
+        with:
+          repository: ${{ secrets.ENV_REPOSITORY }}
+          token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
+          path: events
+          ref: events
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Ansible and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ansible/requirements.txt
+
+      - name: Create vault file from secrets
+        run: |
+          mkdir -p ansible/vars
+          cat > ansible/vars/vault.yml << EOF
+          proxmox_host: ${{ secrets.ENV_PROXMOX_HOST }}
+          proxmox_port: ${{ secrets.ENV_PROXMOX_PORT }}
+          proxmox_api_user: ${{ secrets.ENV_PROXMOX_USER }}
+          proxmox_api_token_id: ${{ secrets.ENV_PROXMOX_TOKEN_ID }}
+          proxmox_api_token_secret: ${{ secrets.ENV_PROXMOX_TOKEN_SECRET }}
+          postgres_password: ${{ secrets.ENV_POSTGRES_PASSWORD }}
+          proxmox_ssh_private_key: ${{ secrets.ENV_PROXMOX_SSH_PRIVATE_KEY }}
+          certbot_pass: ${{ secrets.ENV_CERTBOT_PASS }}
+          gitea_admin_password: ${{ secrets.ENV_GITEA_PASSWORD }}
+          EOF
+
+      - name: Run Ansible playbook
+        env:
+          PROXMOX_HOST: ${{ secrets.PROXMOX_HOST }}
+          PROXMOX_PORT: ${{ secrets.PROXMOX_PORT }}
+          PROXMOX_NODE: ${{ secrets.PROXMOX_NODE }}
+          PROXMOX_USER: ${{ secrets.PROXMOX_USER }}
+          PROXMOX_TOKEN_ID: ${{ secrets.PROXMOX_TOKEN_ID }}
+          PROXMOX_TOKEN_SECRET: ${{ secrets.PROXMOX_TOKEN_SECRET }}
+          ANSIBLE_COLLECTIONS_PATH: ${{ env.ANSIBLE_COLLECTIONS_PATH }}
+          PROXMOX_VALIDATE_CERTS: false
+        run: |
+          cd ansible
+          chmod +x ./ansible-runner.sh
+          ./ansible-runner.sh playbook-executions.yml \
+            -i inventory/proxmox.yml \
+            -vvvv
+
+      - name: Clean up vault file
+        if: always()
+        run: |
+          rm -f ansible/vars/vault.yml
+
+      - name: Get commit params
+        id: date
+        run: echo "date=$(date +'%H:%M:%S %d.%m.%Y')" >> $GITHUB_OUTPUT
+
+      - name: Commit changes
+        uses: EndBug/add-and-commit@v9.1.4
+        with:
+          author_name: ${{ secrets.BOT_NAME }}
+          author_email: ${{ secrets.BOT_EMAIL }}
+          cwd: 'events'
+          add: '.'
+          new_branch: evens
+          message: 'chore(executions): ansible action run at `${{ steps.date.outputs.date }}`'
+          github_token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN  }}
