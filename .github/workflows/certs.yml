@@ -30,7 +30,7 @@ jobs:
     if: needs.check-secret.outputs.env == 'true'
     steps:
       - name: Checkout current repo
-        uses: actions/checkout@v5.0.0
+        uses: actions/checkout@v6.0.2
         with:
           repository: ${{ secrets.ENV_REPOSITORY }}
           ref: main
@@ -62,7 +62,7 @@ jobs:
           echo "::add-mask::${{ matrix.name }}" 
           
       - name: Checkout current repo
-        uses: actions/checkout@v5.0.0
+        uses: actions/checkout@v6.0.2
         with:
           repository: ${{ secrets.ENV_REPOSITORY }}
           ref: main
