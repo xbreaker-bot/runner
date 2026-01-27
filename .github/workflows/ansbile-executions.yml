@@ -66,8 +66,7 @@ jobs:
           cd ansible
           chmod +x ./ansible-runner.sh
           ./ansible-runner.sh playbook-executions.yml \
-            -i inventory/proxmox.yml \
-            -vvvv
+            -i inventory/proxmox.yml
 
       - name: Clean up vault file
         if: always()
