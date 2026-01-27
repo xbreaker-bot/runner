@@ -14,7 +14,7 @@ jobs:
 
         steps:
             - name: checkout main branch
-              uses: actions/checkout@v5.0.0
+              uses: actions/checkout@v6.0.2
               with:
                 repository: xbreaker/pgbackweb
                 ref: features/docker-size
