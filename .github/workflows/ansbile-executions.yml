@@ -85,6 +85,6 @@ jobs:
           author_email: ${{ secrets.BOT_EMAIL }}
           cwd: 'events'
           add: '.'
-          new_branch: evens
+          new_branch: events
           message: 'chore(executions): ansible action run at `${{ steps.date.outputs.date }}`'
           github_token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN  }}
