@@ -1,4 +1,4 @@
-name: Run ansible
+name: ansible proxmox matrix run
 
 on:
   workflow_dispatch:
@@ -7,27 +7,53 @@ env:
   ANSIBLE_COLLECTIONS_PATH: /tmp/collections
 
 jobs:
-  deploy:
+  prepare:
     runs-on: ubuntu-latest
-
+    outputs:
+      servers: ${{ steps.servers.outputs.servers }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v5.0.0
         with:
           repository: ${{ secrets.ENV_REPOSITORY }}
           ref: ansible-postgres
           token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
 
-      - name: Checkout events branch
-        uses: actions/checkout@v6.0.2
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Ansible and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml
+
+      - name: Get servers list
+        id: servers
+        run: |
+          SERVERS_JSON=$(python -c "import sys, yaml, json; data = yaml.safe_load(open('ansible/settings.yml')); print(json.dumps(data['servers']))")
+          echo "servers=$SERVERS_JSON" >> $GITHUB_OUTPUT
+
+  deploy-container:
+    name: ${{ matrix.server.vmid }} - ${{ matrix.server.tag.main }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1
+      matrix:
+        server: ${{ fromJson(needs.prepare.outputs.servers) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5.0.0
         with:
           repository: ${{ secrets.ENV_REPOSITORY }}
+          ref: ansible-postgres
           token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
-          path: events
-          ref: events
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -44,14 +70,13 @@ jobs:
           ansible-galaxy collection install -r ansible/requirements.yml -p $ANSIBLE_COLLECTIONS_PATH
 
       - name: Prepare hash
-        id: hashed_password
         env:
           PROXMOX_PGBACKWEBPASS: ${{ secrets.ENV_PROXMOX_PGBACKWEBPASS }}
         run: |
           HASHED_PASSWORD=$(python ansible/files/bcrypt_hash.py <<< "$PROXMOX_PGBACKWEBPASS")
           sed -i "s|'HASH_VAR'|'$HASHED_PASSWORD'|g" ansible/files/pgbackweb_init.sql
-          
-      - name: Create vault file from secrets
+
+      - name: Create vault file
         run: |
           mkdir -p ansible/vars
           cat > ansible/vars/vault.yml << EOF
@@ -64,9 +89,10 @@ jobs:
           proxmox_ssh_private_key: ${{ secrets.ENV_PROXMOX_SSH_PRIVATE_KEY }}
           certbot_pass: ${{ secrets.ENV_CERTBOT_PASS }}
           gitea_admin_password: ${{ secrets.ENV_GITEA_PASSWORD }}
+          desired_vmid: ${{ matrix.server.vmid }} 
           EOF
 
-      - name: Run Ansible playbook
+      - name: Run Ansible playbook for container
         env:
           PROXMOX_HOST: ${{ secrets.ENV_PROXMOX_HOST }}
           PROXMOX_PORT: ${{ secrets.ENV_PROXMOX_PORT }}
@@ -83,6 +109,131 @@ jobs:
             -i inventory/proxmox.yml \
             -vvvv
 
+  postgres-exec:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5.0.0
+        with:
+          repository: ${{ secrets.ENV_REPOSITORY }}
+          ref: ansible-postgres
+          token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
+
+      - name: Checkout events branch
+        uses: actions/checkout@v6.0.2
+        with:
+          repository: ${{ secrets.ENV_REPOSITORY }}
+          token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
+          path: events
+          ref: events
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Ansible and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ansible/requirements.txt
+          sudo apt install -y yq
+
+      - name: Install required collections
+        run: |
+          mkdir -p $ANSIBLE_COLLECTIONS_PATH
+          ansible-galaxy collection install -r ansible/requirements.yml -p $ANSIBLE_COLLECTIONS_PATH
+
+      - name: Prepare hash
+        env:
+          PROXMOX_PGBACKWEBPASS: ${{ secrets.ENV_PROXMOX_PGBACKWEBPASS }}
+        run: |
+          HASHED_PASSWORD=$(python ansible/files/bcrypt_hash.py <<< "$PROXMOX_PGBACKWEBPASS")
+          sed -i "s|'HASH_VAR'|'$HASHED_PASSWORD'|g" ansible/files/pgbackweb_init.sql
+
+      - name: Create vault file
+        run: |
+          mkdir -p ansible/vars
+          cat > ansible/vars/vault.yml << EOF
+          proxmox_host: ${{ secrets.ENV_PROXMOX_HOST }}
+          proxmox_port: ${{ secrets.ENV_PROXMOX_PORT }}
+          proxmox_api_user: ${{ secrets.ENV_PROXMOX_USER }}
+          proxmox_api_token_id: ${{ secrets.ENV_PROXMOX_TOKEN_ID }}
+          proxmox_api_token_secret: ${{ secrets.ENV_PROXMOX_TOKEN_SECRET }}
+          postgres_password: ${{ secrets.ENV_POSTGRES_PASSWORD }}
+          proxmox_ssh_private_key: ${{ secrets.ENV_PROXMOX_SSH_PRIVATE_KEY }}
+          certbot_pass: ${{ secrets.ENV_CERTBOT_PASS }}
+          gitea_admin_password: ${{ secrets.ENV_GITEA_PASSWORD }}
+          EOF
+
+      - name: Run Ansible playbook postgres-db-executions
+        env:
+          PROXMOX_HOST: ${{ secrets.ENV_PROXMOX_HOST }}
+          PROXMOX_PORT: ${{ secrets.ENV_PROXMOX_PORT }}
+          PROXMOX_NODE: ${{ secrets.ENV_PROXMOX_NODE }}
+          PROXMOX_USER: ${{ secrets.ENV_PROXMOX_USER }}
+          PROXMOX_TOKEN_ID: ${{ secrets.ENV_PROXMOX_TOKEN_ID }}
+          PROXMOX_TOKEN_SECRET: ${{ secrets.ENV_PROXMOX_TOKEN_SECRET }}
+          ANSIBLE_COLLECTIONS_PATH: ${{ env.ANSIBLE_COLLECTIONS_PATH }}
+          PROXMOX_VALIDATE_CERTS: false
+        run: |
+          cd ansible
+          chmod +x ./ansible-runner.sh
+          ./ansible-runner.sh playbook-postgres.yml \
+            -i inventory/proxmox.yml \
+            -vvvv
+
+  certificates:
+    needs: postgres-exec
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5.0.0
+        with:
+          repository: ${{ secrets.ENV_REPOSITORY }}
+          ref: ansible-postgres
+          token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Ansible and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ansible/requirements.txt
+          sudo apt install -y yq
+
+      - name: Install required collections
+        run: |
+          mkdir -p $ANSIBLE_COLLECTIONS_PATH
+          ansible-galaxy collection install -r ansible/requirements.yml -p $ANSIBLE_COLLECTIONS_PATH
+
+      - name: Prepare hash
+        env:
+          PROXMOX_PGBACKWEBPASS: ${{ secrets.ENV_PROXMOX_PGBACKWEBPASS }}
+        run: |
+          HASHED_PASSWORD=$(python ansible/files/bcrypt_hash.py <<< "$PROXMOX_PGBACKWEBPASS")
+          sed -i "s|'HASH_VAR'|'$HASHED_PASSWORD'|g" ansible/files/pgbackweb_init.sql
+
+      - name: Create vault file
+        run: |
+          mkdir -p ansible/vars
+          cat > ansible/vars/vault.yml << EOF
+          proxmox_host: ${{ secrets.ENV_PROXMOX_HOST }}
+          proxmox_port: ${{ secrets.ENV_PROXMOX_PORT }}
+          proxmox_api_user: ${{ secrets.ENV_PROXMOX_USER }}
+          proxmox_api_token_id: ${{ secrets.ENV_PROXMOX_TOKEN_ID }}
+          proxmox_api_token_secret: ${{ secrets.ENV_PROXMOX_TOKEN_SECRET }}
+          postgres_password: ${{ secrets.ENV_POSTGRES_PASSWORD }}
+          proxmox_ssh_private_key: ${{ secrets.ENV_PROXMOX_SSH_PRIVATE_KEY }}
+          certbot_pass: ${{ secrets.ENV_CERTBOT_PASS }}
+          gitea_admin_password: ${{ secrets.ENV_GITEA_PASSWORD }}
+          EOF
+
       - name: Run Ansible certificate playbook
         env:
           ANSIBLE_COLLECTIONS_PATH: ${{ env.ANSIBLE_COLLECTIONS_PATH }}
@@ -94,29 +245,10 @@ jobs:
             -i inventory/proxmox.yml \
             -vvvv
 
-      - name: Clean up vault file
-        if: always()
-        run: |
-          rm -f ansible/vars/vault.yml
-          rm -rf ansible/certs
-
-      - name: Handle deployment failure
-        if: failure()
-        run: |
-          echo "Deployment failed. Possible reasons:"
-          echo "1. Multiple containers with 'postgres' tag found"
-          echo "2. Disk size mismatch (trying to shrink disk)"
-          echo "3. Proxmox API connection issue"
-          echo "4. PostgreSQL healthcheck failed"
-          echo "5. Invalid credentials or permissions"
-          exit 1
-
       - name: Get commit params
         id: commit-params
         run: |
-          # Create commit params
           echo "date=$(date +'%F %T')" >> $GITHUB_OUTPUT
-          # Author & email from last commit
           echo "author=$(git log -n 1 --pretty=format:%an)" >> $GITHUB_OUTPUT
           echo "email=$(git log -n 1 --pretty=format:%ae)" >> $GITHUB_OUTPUT
 
@@ -128,4 +260,4 @@ jobs:
           add: './ansible/settings.yml'
           new_branch: ansible-postgres
           message: 'chore(ansible): ansible action run at `${{ steps.commit-params.outputs.date }}`'
-          github_token: ${{ secrets.GITHUB_TOKEN  }}
+          github_token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
