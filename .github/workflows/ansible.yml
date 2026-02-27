@@ -110,7 +110,7 @@ jobs:
             -vvvv
 
   postgres-exec:
-    needs: prepare
+    needs: deploy-container
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
