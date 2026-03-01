@@ -33,11 +33,11 @@ jobs:
       - name: Get servers list
         id: servers
         run: |
-          SERVERS_JSON=$(python -c "import sys, yaml, json; data = yaml.safe_load(open('ansible/settings.yml')); print(json.dumps(data['servers']))")
+          SERVERS_JSON=$(python -c "import sys, yaml, json; data = yaml.safe_load(open('ansible/settings.yml')); servers = data['servers']; result = [{'vmid': s['vmid'], 'tag': s['tag']['main']} for s in servers]; print(json.dumps(result))")
           echo "servers=$SERVERS_JSON" >> $GITHUB_OUTPUT
 
   deploy-container:
-    name: ${{ matrix.server.vmid }} - ${{ matrix.server.tag.main }}
+    name: ${{ matrix.server.vmid }} - ${{ matrix.server.tag }}
     needs: prepare
     runs-on: ubuntu-latest
     strategy:
