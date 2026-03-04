@@ -2,6 +2,23 @@ name: ansible proxmox matrix run
 
 on:
   workflow_dispatch:
+    inputs:
+      commit:
+        description: Branch
+        required: true
+        type: choice
+        options:
+          - "main"
+          - "develop"
+        default: main
+      debug:
+        description: Enable debug output
+        required: true
+        type: choice
+        options:
+          - "no"
+          - "yes"
+        default: "no"
 
 env:
   ANSIBLE_COLLECTIONS_PATH: /tmp/collections
@@ -13,10 +30,10 @@ jobs:
       servers: ${{ steps.servers.outputs.servers }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5.0.0
+        uses: actions/checkout@v6.0.2
         with:
           repository: ${{ secrets.ENV_REPOSITORY }}
-          ref: ansible-postgres
+          ref: ${{ github.event.inputs.commit }}
           token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
 
       - name: Set up Python
@@ -46,10 +63,10 @@ jobs:
         server: ${{ fromJson(needs.prepare.outputs.servers) }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5.0.0
+        uses: actions/checkout@v6.0.2
         with:
           repository: ${{ secrets.ENV_REPOSITORY }}
-          ref: ansible-postgres
+          ref: ${{ github.event.inputs.commit }}
           token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
 
       - name: Set up Python
@@ -105,19 +122,24 @@ jobs:
         run: |
           cd ansible
           chmod +x ./ansible-runner.sh
-          ./ansible-runner.sh playbook.yml \
-            -i inventory/proxmox.yml \
-            -vvvv
+          if [ "${{ github.event.inputs.debug }}" == "yes" ]; then
+            ./ansible-runner.sh playbook.yml \
+              -i inventory/proxmox.yml \
+              -vvvv
+          else
+            ./ansible-runner.sh playbook.yml \
+              -i inventory/proxmox.yml
+          fi
 
   postgres-exec:
     needs: deploy-container
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5.0.0
+        uses: actions/checkout@v6.0.2
         with:
           repository: ${{ secrets.ENV_REPOSITORY }}
-          ref: ansible-postgres
+          ref: ${{ github.event.inputs.commit }}
           token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
 
       - name: Checkout events branch
@@ -180,19 +202,24 @@ jobs:
         run: |
           cd ansible
           chmod +x ./ansible-runner.sh
-          ./ansible-runner.sh playbook-postgres.yml \
-            -i inventory/proxmox.yml \
-            -vvvv
+          if [ "${{ github.event.inputs.debug }}" == "yes" ]; then
+            ./ansible-runner.sh playbook-postgres.yml \
+              -i inventory/proxmox.yml \
+              -vvvv
+          else
+            ./ansible-runner.sh playbook-postgres.yml \
+              -i inventory/proxmox.yml 
+          fi
 
   certificates:
     needs: postgres-exec
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5.0.0
+        uses: actions/checkout@v6.0.2
         with:
           repository: ${{ secrets.ENV_REPOSITORY }}
-          ref: ansible-postgres
+          ref: ${{ github.event.inputs.commit }}
           token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
 
       - name: Set up Python
@@ -241,9 +268,14 @@ jobs:
         run: |
           cd ansible
           chmod +x ./ansible-runner.sh
-          ./ansible-runner.sh playbook-certs.yml \
-            -i inventory/proxmox.yml \
-            -vvvv
+          if [ "${{ github.event.inputs.debug }}" == "yes" ]; then
+            ./ansible-runner.sh playbook-certs.yml \
+              -i inventory/proxmox.yml \
+              -vvvv
+          else
+            ./ansible-runner.sh playbook-certs.yml \
+              -i inventory/proxmox.yml
+          fi
 
       - name: Get commit params
         id: commit-params
@@ -258,6 +290,6 @@ jobs:
           author_name: ${{ steps.commit-params.outputs.author }}
           author_email: ${{ steps.commit-params.outputs.email }}
           add: './ansible/settings.yml'
-          new_branch: ansible-postgres
+          new_branch: ${{ github.event.inputs.commit }}
           message: 'chore(ansible): ansible action run at `${{ steps.commit-params.outputs.date }}`'
           github_token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
