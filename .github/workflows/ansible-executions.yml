@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v6.0.2
         with:
           repository: ${{ secrets.ENV_REPOSITORY }}
-          ref: ansible-postgres
+          ref: main
           token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
 
       - name: Checkout events branch
