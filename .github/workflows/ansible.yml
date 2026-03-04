@@ -13,7 +13,7 @@ jobs:
       servers: ${{ steps.servers.outputs.servers }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5.0.0
+        uses: actions/checkout@v6.0.2
         with:
           repository: ${{ secrets.ENV_REPOSITORY }}
           ref: ansible-postgres
@@ -46,7 +46,7 @@ jobs:
         server: ${{ fromJson(needs.prepare.outputs.servers) }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5.0.0
+        uses: actions/checkout@v6.0.2
         with:
           repository: ${{ secrets.ENV_REPOSITORY }}
           ref: ansible-postgres
@@ -114,7 +114,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5.0.0
+        uses: actions/checkout@v6.0.2
         with:
           repository: ${{ secrets.ENV_REPOSITORY }}
           ref: ansible-postgres
@@ -189,7 +189,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5.0.0
+        uses: actions/checkout@v6.0.2
         with:
           repository: ${{ secrets.ENV_REPOSITORY }}
           ref: ansible-postgres
