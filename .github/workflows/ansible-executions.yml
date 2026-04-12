@@ -6,6 +6,8 @@ on:
 env:
   ANSIBLE_COLLECTIONS_PATH: /tmp/collections
 
+concurrency: ci-${{ github.ref }}
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
