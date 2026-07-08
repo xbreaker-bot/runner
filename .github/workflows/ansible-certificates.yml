@@ -1,4 +1,4 @@
-name: ansible proxmox matrix run
+name: ansible proxmox certificates
 
 on:
   workflow_dispatch:
