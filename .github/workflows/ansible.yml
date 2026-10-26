@@ -30,7 +30,7 @@ jobs:
       servers: ${{ steps.servers.outputs.servers }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
         with:
           repository: ${{ secrets.ENV_REPOSITORY }}
           ref: ${{ github.event.inputs.commit }}
@@ -63,7 +63,7 @@ jobs:
         server: ${{ fromJson(needs.prepare.outputs.servers) }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
         with:
           repository: ${{ secrets.ENV_REPOSITORY }}
           ref: ${{ github.event.inputs.commit }}
@@ -136,14 +136,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
         with:
           repository: ${{ secrets.ENV_REPOSITORY }}
           ref: ${{ github.event.inputs.commit }}
           token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
 
       - name: Checkout events branch
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
         with:
           repository: ${{ secrets.ENV_REPOSITORY }}
           token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
@@ -216,7 +216,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
         with:
           repository: ${{ secrets.ENV_REPOSITORY }}
           ref: ${{ github.event.inputs.commit }}

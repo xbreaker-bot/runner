@@ -14,14 +14,14 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
         with:
           repository: ${{ secrets.ENV_REPOSITORY }}
           ref: main
           token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
 
       - name: Checkout events branch
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
         with:
           repository: ${{ secrets.ENV_REPOSITORY }}
           token: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
