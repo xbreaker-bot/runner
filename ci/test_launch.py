@@ -15,6 +15,27 @@ import launch
 
 
 class LauncherTests(unittest.TestCase):
+    def test_configuration_failure_prints_reason_without_secret_values(self):
+        env = {"GH_BOT_WORKFLOW_TOKEN": "hidden-token", "CI_SOURCE_REPOSITORY": "private/source",
+               "CI_RUNNER_REPOSITORY": "private/executor", "GITHUB_REPOSITORY": "private/executor",
+               "CI_ALLOWED_ACTORS": "[hidden-actor]", "GITHUB_ACTOR": "hidden-actor",
+               "CI_CONTROL_REF": "trusted", "CI_S3_ENDPOINT": "https://private.example.org",
+               "CI_S3_BUCKET": "private-bucket", "CI_S3_ACCESS_KEY_ID": "hidden-access",
+               "CI_S3_SECRET_ACCESS_KEY": "hidden-secret", "CI_S3_GATE_TOKEN": "hidden-gate",
+               "CI_S3_REGION": "us-east-1"}
+        for key, value, reason in (("CI_ALLOWED_ACTORS", "[hidden-actor]", "invalid_actor_configuration"),
+                                   ("GH_BOT_WORKFLOW_TOKEN", "", "missing_configuration:GH_BOT_WORKFLOW_TOKEN"),
+                                   ("CI_SOURCE_REPOSITORY", "invalid", "invalid_repository_configuration:CI_SOURCE_REPOSITORY"),
+                                   ("GITHUB_REPOSITORY", "other/executor", "runner_repository_not_allowed")):
+            public = io.StringIO()
+            with self.subTest(key=key), patch.dict(os.environ, {**env, key: value}, clear=True), \
+                    contextlib.redirect_stdout(public), patch.object(launch, "github") as github:
+                self.assertEqual(launch.main(), 1)
+                github.assert_not_called()
+                self.assertIn("[" + reason + "]", public.getvalue())
+                for secret in ("hidden-token", "hidden-actor", "hidden-secret", "private/source", "private.example.org"):
+                    self.assertNotIn(secret, public.getvalue())
+
     def test_config_requires_secrets_and_checks_caller_without_disclosing_values(self):
         env = {"GH_BOT_WORKFLOW_TOKEN": "test-token", "CI_SOURCE_REPOSITORY": "example/source",
                "CI_RUNNER_REPOSITORY": "example/executor", "GITHUB_REPOSITORY": "example/executor",

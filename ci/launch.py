@@ -36,11 +36,12 @@ def validate_config(env):
     required = ("GH_BOT_WORKFLOW_TOKEN", "CI_SOURCE_REPOSITORY", "CI_RUNNER_REPOSITORY",
                 "CI_ALLOWED_ACTORS", "CI_CONTROL_REF", "CI_S3_ENDPOINT", "CI_S3_BUCKET",
                 "CI_S3_ACCESS_KEY_ID", "CI_S3_SECRET_ACCESS_KEY", "CI_S3_GATE_TOKEN", "CI_S3_REGION")
-    if any(not env.get(key) for key in required):
-        raise CIError("missing_configuration")
+    for key in required:
+        if not env.get(key):
+            raise CIError("missing_configuration:" + key)
     for key in ("CI_SOURCE_REPOSITORY", "CI_RUNNER_REPOSITORY"):
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", env[key]):
-            raise CIError("invalid_repository_configuration")
+            raise CIError("invalid_repository_configuration:" + key)
     if env.get("GITHUB_REPOSITORY") != env["CI_RUNNER_REPOSITORY"]:
         raise CIError("runner_repository_not_allowed")
     try:
@@ -358,8 +359,10 @@ def main():
     env = os.environ
     try:
         validate_config(env)
-    except CIError:
-        print("Private CI: invalid configuration or caller")
+    except CIError as error:
+        # validate_config emits only fixed codes and names from its fixed key
+        # lists, never values, actor names or exception text from JSON parsing.
+        print("Private CI: invalid configuration or caller [" + str(error) + "]")
         return 1
     def interrupted(signum, frame):
         raise CIError("run_interrupted")
