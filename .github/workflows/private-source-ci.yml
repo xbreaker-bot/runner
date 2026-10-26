@@ -1,0 +1,50 @@
+name: Private source CI
+run-name: Private source CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full commit SHA in the approved source repository
+        required: true
+        type: string
+      pipeline:
+        description: Approved pipeline
+        required: true
+        default: s00
+        type: choice
+        options: [s00]
+  repository_dispatch:
+    types: [private-source-ci]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-ci-${{ github.event.inputs.source_sha || github.event.client_payload.source_sha }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Load launcher
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Execute isolated checks
+        env:
+          GH_BOT_WORKFLOW_TOKEN: ${{ secrets.GH_BOT_WORKFLOW_TOKEN }}
+          CI_SOURCE_REPOSITORY: ${{ secrets.CI_SOURCE_REPOSITORY }}
+          CI_RUNNER_REPOSITORY: ${{ secrets.CI_RUNNER_REPOSITORY }}
+          CI_ALLOWED_ACTORS: ${{ secrets.CI_ALLOWED_ACTORS }}
+          CI_CONTROL_REF: ${{ secrets.CI_CONTROL_REF }}
+          CI_S3_BUCKET: ${{ secrets.CI_S3_BUCKET }}
+          CI_S3_ENDPOINT: ${{ secrets.CI_S3_ENDPOINT }}
+          CI_S3_ACCESS_KEY_ID: ${{ secrets.CI_S3_ACCESS_KEY_ID }}
+          CI_S3_SECRET_ACCESS_KEY: ${{ secrets.CI_S3_SECRET_ACCESS_KEY }}
+          CI_S3_GATE_TOKEN: ${{ secrets.CI_S3_GATE_TOKEN }}
+          CI_S3_REGION: ${{ secrets.CI_S3_REGION }}
+        run: python3 ci/launch.py
