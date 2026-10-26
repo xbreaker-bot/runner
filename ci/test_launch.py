@@ -9,12 +9,30 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import urllib.error
 from unittest.mock import patch
 
 import launch
 
 
 class LauncherTests(unittest.TestCase):
+    def test_public_diagnostics_preserve_http_status_without_sensitive_exception_text(self):
+        cause = urllib.error.HTTPError("https://hidden.example.org/repo?token=secret-value", 403,
+                                       "hidden server response", {}, None)
+        error = launch.CIError("http_request_failed")
+        error.__cause__ = cause
+        public = io.StringIO()
+        with contextlib.redirect_stdout(public):
+            detail = launch.public_failure("resolve_control_ref", error)
+            launch.public_failure("execute_pipeline", RuntimeError("hidden command and secret-value"))
+            launch.public_failure("execute_pipeline", launch.CIError("secret-value"))
+        self.assertEqual(detail, {"stage": "resolve_control_ref", "code": "http_request_failed", "http_status": 403})
+        self.assertIn("stage=resolve_control_ref", public.getvalue())
+        self.assertIn("http_status=403", public.getvalue())
+        self.assertIn("code=unexpected_error", public.getvalue())
+        for forbidden in ("hidden.example.org", "secret-value", "hidden server response", "hidden command"):
+            self.assertNotIn(forbidden, public.getvalue())
+
     def test_configuration_failure_prints_reason_without_secret_values(self):
         env = {"GH_BOT_WORKFLOW_TOKEN": "hidden-token", "CI_SOURCE_REPOSITORY": "private/source",
                "CI_RUNNER_REPOSITORY": "private/executor", "GITHUB_REPOSITORY": "private/executor",
@@ -118,7 +136,11 @@ class LauncherTests(unittest.TestCase):
                 self.assertEqual(status.call_args.args[2], expected)
                 self.assertEqual(rc, 0 if failure is None else 1)
                 self.assertNotIn("private execution output", public.getvalue())
-                self.assertNotIn("private", public.getvalue().lower().replace("private ci", ""))
+                self.assertNotIn("test-owner/test-source", public.getvalue())
+                if failure == "pipeline_failed":
+                    self.assertIn("stage=execute_pipeline code=pipeline_failed", public.getvalue())
+                elif failure == "upload":
+                    self.assertIn("stage=upload_evidence", public.getvalue())
 
     def test_dispatch_rejects_refs_commands_and_other_pipelines(self):
         for value in ("main", "a" * 39, "a" * 40 + ";id", "A" * 40, 42):

@@ -62,6 +62,68 @@ class CIError(Exception):
     """Only controlled, non-secret codes may reach the public console."""
 
 
+ERROR_HINTS = {
+    "http_request_failed": "HTTP or network request failed.",
+    "source_commit_not_found": "Source commit was not found or is inaccessible.",
+    "source_archive_failed": "Source archive could not be downloaded.",
+    "source_archive_redirect_missing": "Archive response did not contain the expected redirect.",
+    "invalid_archive_redirect": "Archive redirect was rejected.",
+    "canonical_ci_missing": "The configured control ref does not contain the canonical CI directory.",
+    "ci_definition_differs_from_main": "CI directories differ: update the tested branch from the trusted control ref.",
+    "invalid_source_sha": "source_sha must be a full lowercase 40-character commit SHA.",
+    "unsupported_event": "Unsupported event type.",
+    "pipeline_not_allowed": "Requested pipeline is not allowed.",
+    "unsupported_manifest": "Unsupported canonical CI manifest version.",
+    "invalid_pipeline_script": "Invalid pipeline script in the canonical manifest.",
+    "invalid_pipeline_timeout": "Invalid pipeline timeout in the canonical manifest.",
+    "invalid_image_reference": "An image reference is not pinned to a valid digest.",
+    "image_digest_missing": "A resolved image digest was not found.",
+    "inner_daemon_not_ready": "The isolated Docker daemon did not become ready.",
+    "command_failed": "A build or execution command failed; inspect the private execution log.",
+    "command_timeout": "A command exceeded its timeout.",
+    "command_output_limit": "A command exceeded its output limit.",
+    "pipeline_failed": "The pipeline failed; inspect the private execution log.",
+    "evidence_collection_failed": "Evidence could not be collected from the worker.",
+    "evidence_upload_failed": "Evidence upload failed; no successful CI status was published.",
+    "evidence_upload_limit": "Evidence exceeds the upload size or file-count limit.",
+    "invalid_s3_endpoint": "CI_S3_ENDPOINT must be an HTTPS origin without path, query or credentials.",
+    "invalid_bucket_configuration": "CI_S3_BUCKET has an invalid format.",
+    "invalid_header_value": "A configured header contains forbidden line breaks.",
+    "response_too_large": "An HTTP response exceeded its size limit.",
+    "expanded_archive_too_large": "An archive exceeded its expansion limit.",
+    "unsafe_archive_path": "An archive contains an unsafe path.",
+    "archive_links_not_allowed": "An archive contains a link or special entry.",
+    "duplicate_archive_entry": "An archive contains a duplicate file.",
+    "ci_symlink_not_allowed": "The canonical CI directory contains a link.",
+    "run_interrupted": "The run was interrupted.",
+}
+
+
+def public_failure(stage, error):
+    """Emit fixed diagnostic text; never echo error strings, URLs or bodies."""
+    raw_code = str(error) if isinstance(error, CIError) else ""
+    code = raw_code if raw_code in ERROR_HINTS else "unexpected_error"
+    hint = ERROR_HINTS.get(code, "Unexpected launcher error; no private exception text was printed.")
+    current, seen, http_status = error, set(), None
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, urllib.error.HTTPError) and type(current.code) is int and 100 <= current.code <= 599:
+            http_status = current.code
+            break
+        current = current.__cause__ or current.__context__
+    if http_status is not None:
+        if http_status in (401, 403):
+            hint += " Check credentials and permissions for this stage."
+        elif http_status == 404:
+            hint += " Check the configured repository/ref/object and read permissions."
+        elif http_status == 429:
+            hint += " The remote service rate limit was reached."
+    detail = {"stage": stage, "code": code, "http_status": http_status}
+    suffix = " http_status=" + str(http_status) if http_status else ""
+    print("Private CI: stage=" + stage + " code=" + code + suffix + " - " + hint)
+    return detail
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise CIError("unexpected_redirect")
@@ -354,6 +416,8 @@ def execute(source, control, output, pipeline, log, manifest):
 def main():
     os.umask(0o077)
     sha = pipeline = None
+    stage = "read_event"
+    diagnostics = []
     final = "error"
     error_code = "launcher_failed"
     env = os.environ
@@ -378,26 +442,36 @@ def main():
         try:
             sha, pipeline = inputs(env["GITHUB_EVENT_NAME"], json.loads(Path(env["GITHUB_EVENT_PATH"]).read_text()))
             # Resolve and validate source SHA before publishing any status.
+            stage = "fetch_source_commit"
             if github("commits/" + sha, env["GH_BOT_WORKFLOW_TOKEN"])["sha"] != sha:
                 raise CIError("source_commit_not_found")
+            stage = "publish_pending_status"
             status(sha, pipeline, "pending", env["GH_BOT_WORKFLOW_TOKEN"])
+            stage = "resolve_control_ref"
             trusted_sha = github("commits/" + urllib.parse.quote(env["CI_CONTROL_REF"], safe=""), env["GH_BOT_WORKFLOW_TOKEN"])["sha"]
             manifest.update(source_repository=env["CI_SOURCE_REPOSITORY"], source_sha=sha, control_sha=trusted_sha, pipeline=pipeline,
                             run_id=env["GITHUB_RUN_ID"], run_attempt=env.get("GITHUB_RUN_ATTEMPT", "1"))
+            stage = "fetch_source_archive"
             snapshot(sha, env["GH_BOT_WORKFLOW_TOKEN"], root / "source")
+            stage = "fetch_control_archive"
             snapshot(trusted_sha, env["GH_BOT_WORKFLOW_TOKEN"], root / "trusted")
+            stage = "compare_ci"
             control = root / "trusted/.ci/runner"
             manifest["ci_tree_sha256"] = tree_hash(control)
             if tree_hash(root / "source/.ci/runner") != manifest["ci_tree_sha256"]:
                 raise CIError("ci_definition_differs_from_main")
             with (output / "execution.log").open("wb") as log:
+                stage = "execute_pipeline"
                 execute(root / "source", control, output, pipeline, log, manifest)
             final, error_code = "success", None
         except Exception as error:
-            error_code = str(error) if isinstance(error, CIError) else "launcher_failed"
+            diagnostic = public_failure(stage, error)
+            diagnostics.append(diagnostic)
+            error_code = diagnostic["code"]
             final = "failure" if error_code == "pipeline_failed" else "error"
         finally:
-            manifest.update(finished_at=dt.datetime.now(dt.timezone.utc).isoformat(), state=final, error_code=error_code)
+            manifest.update(finished_at=dt.datetime.now(dt.timezone.utc).isoformat(), state=final,
+                            error_code=error_code, diagnostics=diagnostics)
             log_path = output / "execution.log"
             if log_path.exists():
                 with log_path.open("rb") as log, gzip.open(output / "execution.log.gz", "wb") as compressed:
@@ -408,6 +482,7 @@ def main():
                                      for p in sorted(output.rglob("*")) if p.is_file() and not p.is_symlink()]
             (output / "manifest.json").write_text(json.dumps(manifest, indent=2))
             result = {"version": 1, "state": final, "error_code": error_code,
+                      "diagnostics": diagnostics,
                       "source_sha": sha, "pipeline": pipeline,
                       "evidence_incomplete": manifest["evidence_incomplete"]}
             (output / "result.json").write_text(json.dumps(result, indent=2))
@@ -415,11 +490,13 @@ def main():
                 prefix = sha + "/" + env["GITHUB_RUN_ID"] + "-" + env.get("GITHUB_RUN_ATTEMPT", "1")
                 try:
                     upload(output, prefix)
-                except Exception:
+                except Exception as error:
+                    diagnostics.append(public_failure("upload_evidence", error))
                     final, error_code = "error", "evidence_upload_failed"
                 try:
                     status(sha, pipeline, final, env["GH_BOT_WORKFLOW_TOKEN"])
-                except Exception:
+                except Exception as error:
+                    diagnostics.append(public_failure("publish_final_status", error))
                     final, error_code = "error", "status_publish_failed"
         # No exception text, source paths, URLs or private output on stdout.
         print("Private CI: " + final)
@@ -429,8 +506,9 @@ def main():
 if __name__ == "__main__":
     try:
         code = main()
-    except Exception:
+    except Exception as error:
         # A failed finalizer must not dump a traceback into the public run.
+        public_failure("finalize_launcher", error)
         print("Private CI: launcher error")
         code = 1
     raise SystemExit(code)
