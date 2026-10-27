@@ -4,6 +4,8 @@ import io
 import json
 import os
 from pathlib import Path
+import re
+import stat
 import subprocess
 import sys
 import tarfile
@@ -146,10 +148,128 @@ class LauncherTests(unittest.TestCase):
         for value in ("main", "a" * 39, "a" * 40 + ";id", "A" * 40, 42):
             with self.assertRaises(launch.CIError):
                 launch.inputs("workflow_dispatch", {"inputs": {"source_sha": value}})
-        with self.assertRaises(launch.CIError):
-            launch.inputs("workflow_dispatch", {"inputs": {"source_sha": "a" * 40, "pipeline": "bash"}})
+        for pipeline in ("bash", "s00;rm", "S00", "agent_memory", "agent-memory/../s00", "", None, 42):
+            with self.subTest(pipeline=pipeline), self.assertRaises(launch.CIError):
+                launch.inputs("workflow_dispatch",
+                              {"inputs": {"source_sha": "a" * 40, "pipeline": pipeline}})
         self.assertEqual(launch.inputs("repository_dispatch", {
             "action": "private-source-ci", "client_payload": {"source_sha": "a" * 40}}), ("a" * 40, "s00"))
+
+    def test_allowed_pipelines_are_dispatchable_and_match_the_workflow_choice(self):
+        # Регламент S-24: pipeline `agent-memory` - постоянное имя серверного gate,
+        # `s00` остаётся самостоятельной регрессией стенда.
+        for pipeline in launch.ALLOWED_PIPELINES:
+            with self.subTest(pipeline=pipeline):
+                self.assertEqual(launch.inputs("workflow_dispatch", {"inputs": {
+                    "source_sha": "a" * 40, "pipeline": pipeline}}), ("a" * 40, pipeline))
+        # Choice workflow живёт в этой же копии launcher и обязан предлагать ровно
+        # разрешённые значения: расхождение дало бы отказ после диспатча.
+        workflow = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "private-source-ci.yml"
+        options = re.search(r"options:\s*\[([^\]]*)\]", workflow.read_text()).group(1)
+        self.assertEqual(sorted(value.strip() for value in options.split(",")),
+                         sorted(launch.ALLOWED_PIPELINES))
+
+    def test_execute_requires_pinned_package_manager_and_pipeline_from_trusted_ci(self):
+        digest = "sha256:" + "a" * 64
+        base = {"version": 1,
+                "images": {"node": "node:24.22.0-bookworm@" + digest,
+                           "docker_cli": "docker:28.5.2-cli@" + digest,
+                           "dind": "docker:28.5.2-dind@" + digest},
+                "pipelines": {"agent-memory": {"script": "pipelines/agent-memory.sh",
+                                               "timeout_seconds": 1200}}}
+        with tempfile.TemporaryDirectory() as tmp:
+            control = Path(tmp) / "ci"
+            (control / "pipelines").mkdir(parents=True)
+            (control / "pipelines" / "agent-memory.sh").write_text("#!/bin/sh\nexit 0\n")
+            source = Path(tmp) / "source"
+            source.mkdir()
+            output = Path(tmp) / "out"
+            output.mkdir()
+
+            def run_with(manifest):
+                (control / "manifest.json").write_text(json.dumps(manifest))
+                calls = []
+
+                def fake_run(args, log, **kwargs):
+                    calls.append([str(item) for item in args])
+                    if args[:2] == ["docker", "image"]:
+                        return json.dumps(["node:24.22.0-bookworm@" + digest]).encode()
+                    if args[:2] == ["docker", "build"]:
+                        raise launch.CIError("stop_after_build")
+                    return b""
+
+                recorded = {}
+                with patch.object(launch, "run", side_effect=fake_run):
+                    with self.assertRaises(launch.CIError) as raised:
+                        launch.execute(source, control, output, "agent-memory", io.BytesIO(), recorded)
+                return calls, raised.exception, recorded
+
+            # Pin package manager обязателен и обязан быть точной версией: worker
+            # не должен скачивать pnpm во время прогона.
+            for pin in (None, "latest", "12", "12.x", 12150, ""):
+                manifest = dict(base)
+                if pin is not None:
+                    manifest["pnpm"] = pin
+                with self.subTest(pin=pin), self.assertRaises(launch.CIError) as raised:
+                    (control / "manifest.json").write_text(json.dumps(manifest))
+                    launch.execute(source, control, output, "agent-memory", io.BytesIO(), {})
+                self.assertEqual("invalid_package_manager_pin", str(raised.exception))
+
+            calls, error, recorded = run_with({**base, "pnpm": "12.15.0"})
+            self.assertEqual("stop_after_build", str(error))
+            self.assertEqual(recorded["pnpm"], "12.15.0")
+            build = next(call for call in calls if call[:2] == ["docker", "build"])
+            self.assertIn("--build-arg", build)
+            self.assertIn("PNPM_VERSION=12.15.0", build)
+
+            # Pipeline, которого нет в доверенном manifest, - отказ по имени,
+            # а не необработанная KeyError из чтения manifest.
+            with self.assertRaises(launch.CIError) as raised:
+                (control / "manifest.json").write_text(json.dumps({**base, "pnpm": "12.15.0",
+                                                                  "pipelines": {"s00": {}}}))
+                launch.execute(source, control, output, "agent-memory", io.BytesIO(), {})
+            self.assertEqual("pipeline_not_allowed", str(raised.exception))
+
+    def test_pipeline_timeout_bound_covers_the_measured_cold_server_gate_run(self):
+        # Замер холодного прогона agent-memory на disposable DinD (2026-10-27):
+        # 1074 с, из них 1034 с - скачка образа стенда внутри вложенного docker.
+        # На пределе 1200 с запас был меньше 15%, поэтому launcher принимает до
+        # 1800 с. Pipeline s00 остаётся на 1200 с: его прогон короче.
+        digest = "sha256:" + "a" * 64
+        manifest = {"version": 1, "pnpm": "12.15.0",
+                    "images": {"node": "node:24.22.0-bookworm@" + digest,
+                               "docker_cli": "docker:28.5.2-cli@" + digest,
+                               "dind": "docker:28.5.2-dind@" + digest}}
+        with tempfile.TemporaryDirectory() as tmp:
+            control = Path(tmp) / "ci"
+            (control / "pipelines").mkdir(parents=True)
+            (control / "pipelines" / "agent-memory.sh").write_text("#!/bin/sh\nexit 0\n")
+            source = Path(tmp) / "source"
+            source.mkdir()
+            output = Path(tmp) / "out"
+            output.mkdir()
+
+            def with_timeout(timeout):
+                manifest["pipelines"] = {"agent-memory": {
+                    "script": "pipelines/agent-memory.sh", "timeout_seconds": timeout}}
+                (control / "manifest.json").write_text(json.dumps(manifest))
+
+                def fake_run(args, log, **kwargs):
+                    if args[:2] == ["docker", "image"]:
+                        return json.dumps(["node:24.22.0-bookworm@" + digest]).encode()
+                    if args[:2] == ["docker", "build"]:
+                        raise launch.CIError("stop_after_build")
+                    return b""
+
+                with patch.object(launch, "run", side_effect=fake_run):
+                    with self.assertRaises(launch.CIError) as raised:
+                        launch.execute(source, control, output, "agent-memory", io.BytesIO(), {})
+                return str(raised.exception)
+
+            self.assertEqual("stop_after_build", with_timeout(1800))
+            for timeout in (1801, 10 ** 6, 29, "600", None):
+                with self.subTest(timeout=timeout):
+                    self.assertEqual("invalid_pipeline_timeout", with_timeout(timeout))
 
     def test_archive_rejects_traversal_links_and_duplicate_files(self):
         for kind in ("traversal", "symlink", "hardlink", "duplicate"):
@@ -165,6 +285,38 @@ class LauncherTests(unittest.TestCase):
                         tar.addfile(item, io.BytesIO())
                 with self.assertRaises(launch.CIError):
                     launch.extract(data.getvalue(), Path(tmp) / "out")
+
+    def test_extract_normalizes_directory_modes_for_unprivileged_container_users(self):
+        # Режимы файлов лаунчер выставлял всегда, каталоги - нет: они наследовали
+        # umask 0o077 из main. docker build это не заметил бы (он root), а вот
+        # COPY переносит режим каталога в образ, и роль postgres в стенде БД
+        # перестаёт видеть sql/operator. Поэтому нормализация проверяется тестом.
+        data = io.BytesIO()
+        with tarfile.open(fileobj=data, mode="w") as tar:
+            nested = tarfile.TarInfo("sql/operator")
+            nested.type = tarfile.DIRTYPE
+            nested.mode = 0o700
+            tar.addfile(nested)
+            entry = tarfile.TarInfo("sql/operator/verify-versions.sql")
+            entry.size = 2
+            entry.mode = 0o600
+            tar.addfile(entry, io.BytesIO(b"ok"))
+            implicit = tarfile.TarInfo("sql/implicit/check.sql")
+            implicit.size = 2
+            implicit.mode = 0o600
+            tar.addfile(implicit, io.BytesIO(b"ok"))
+        with tempfile.TemporaryDirectory() as tmp:
+            previous = os.umask(0o077)
+            try:
+                launch.extract(data.getvalue(), Path(tmp) / "out")
+            finally:
+                os.umask(previous)
+            out = Path(tmp) / "out"
+            for directory in (out / "sql", out / "sql" / "operator", out / "sql" / "implicit"):
+                self.assertEqual(0o755, stat.S_IMODE(directory.stat().st_mode), str(directory))
+            for item in (out / "sql" / "operator" / "verify-versions.sql",
+                         out / "sql" / "implicit" / "check.sql"):
+                self.assertEqual(0o644, stat.S_IMODE(item.stat().st_mode), str(item))
 
     def test_archive_expansion_limit(self):
         data = io.BytesIO()

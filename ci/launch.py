@@ -17,6 +17,7 @@ from pathlib import Path, PurePosixPath
 import re
 import selectors
 import signal
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -30,6 +31,13 @@ MAX_ARCHIVE = 64 * 1024 * 1024
 MAX_EXPANDED = 256 * 1024 * 1024
 MAX_LOG = 32 * 1024 * 1024
 SHA = re.compile(r"[0-9a-f]{40}\Z")
+EXACT_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+\Z")
+
+# Pipelines, которые launcher готов запустить. Каждый пункт обязан существовать
+# в каноническом manifest доверенного ref (.ci/runner/manifest.json) и в choices
+# workflow: список меняется согласованно в трёх местах и в тестах launcher.
+# s00 - регрессия стенда S-00, agent-memory - quality gate серверного workspace.
+ALLOWED_PIPELINES = ("s00", "agent-memory")
 
 
 def validate_config(env):
@@ -74,6 +82,7 @@ ERROR_HINTS = {
     "unsupported_event": "Unsupported event type.",
     "pipeline_not_allowed": "Requested pipeline is not allowed.",
     "unsupported_manifest": "Unsupported canonical CI manifest version.",
+    "invalid_package_manager_pin": "The canonical manifest does not pin an exact package manager version.",
     "invalid_pipeline_script": "Invalid pipeline script in the canonical manifest.",
     "invalid_pipeline_timeout": "Invalid pipeline timeout in the canonical manifest.",
     "invalid_image_reference": "An image reference is not pinned to a valid digest.",
@@ -159,14 +168,28 @@ def inputs(event_name, event):
     sha, pipeline = value.get("source_sha", ""), value.get("pipeline", "s00")
     if not isinstance(sha, str) or not SHA.fullmatch(sha):
         raise CIError("invalid_source_sha")
-    if pipeline != "s00":
+    if pipeline not in ALLOWED_PIPELINES:
         raise CIError("pipeline_not_allowed")
     return sha, pipeline
+
+
+def normalize_parents(directory, destination):
+    """Каталоги, которых нет в архиве, создаёт mkdir(parents=True) под umask
+    процесса, поэтому нормализуется вся цепочка предков, а не только явно
+    перечисленный в архиве каталог."""
+    stop = destination.resolve()
+    current = directory
+    while current != stop and 0o755 & ~stat.S_IMODE(current.stat().st_mode):
+        current.chmod(0o755)
+        current = current.parent
 
 
 def extract(archive, destination, *, strip_root=False):
     """Reject links/devices/traversal and cap expanded bytes before extracting."""
     destination.mkdir(parents=True, exist_ok=True)
+    # Корень тоже создаётся под umask процесса, а недоступный корень скрыл бы
+    # всё дерево от не-привилегированной роли контейнера.
+    destination.chmod(0o755)
     total, seen = 0, set()
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:*") as tar:
         for member in tar:
@@ -197,8 +220,17 @@ def extract(archive, destination, *, strip_root=False):
             target = destination / relative
             if member.isdir():
                 target.mkdir(parents=True, exist_ok=True)
+                # Каталог наследует umask процесса (main выставляет 0o077), а файлы
+                # ниже нормализуются явным chmod. Разница заметна не root-сборке
+                # docker build и не docker cp, а внутри образа: COPY переносит режим
+                # каталога из контекста, и вложенный путь становится недоступен
+                # не-привилегированной роли контейнера. Стенд БД читает sql/init под
+                # ролью postgres, поэтому режимы каталогов нормализуются здесь же,
+                # где и режимы файлов.
+                normalize_parents(target, destination)
             else:
                 target.parent.mkdir(parents=True, exist_ok=True)
+                normalize_parents(target.parent, destination)
                 with tar.extractfile(member) as source, target.open("wb") as output:
                     while block := source.read(1024 * 1024):
                         output.write(block)
@@ -343,12 +375,25 @@ def execute(source, control, output, pipeline, log, manifest):
     config = json.loads((control / "manifest.json").read_text())
     if config.get("version") != 1:
         raise CIError("unsupported_manifest")
+    if pipeline not in config.get("pipelines", {}):
+        raise CIError("pipeline_not_allowed")
+    # S-24: worker обязан нести точную версию package manager из канонического
+    # manifest. Несфиксированная версия означала бы, что gate зависит от реестра
+    # в момент прогона, а не от содержимого проверяемого коммита.
+    pnpm = config.get("pnpm")
+    if not isinstance(pnpm, str) or not EXACT_VERSION.fullmatch(pnpm):
+        raise CIError("invalid_package_manager_pin")
+    manifest["pnpm"] = pnpm
     spec = config["pipelines"][pipeline]
     script = spec["script"]
     if not re.fullmatch(r"pipelines/[a-z0-9-]+\.sh", script) or not (control / script).is_file():
         raise CIError("invalid_pipeline_script")
     timeout = spec["timeout_seconds"]
-    if not isinstance(timeout, int) or not 30 <= timeout <= 1200:
+    # Предел 1800 с, а не 1200: замер холодного прогона agent-memory на disposable
+    # DinD дал 1074 с, из них 1034 с - скачка образа БД стенда вложенным демоном.
+    # Та же стадия в других прогонах того же контура занимала 20-75 с, поэтому
+    # зависимость от реестра обязана иметь запас. Для s00 запись остаётся 1200 с.
+    if not isinstance(timeout, int) or not 30 <= timeout <= 1800:
         raise CIError("invalid_pipeline_timeout")
     images = {}
     for name in ("node", "docker_cli", "dind"):
@@ -366,7 +411,8 @@ def execute(source, control, output, pipeline, log, manifest):
     network, daemon, worker = ("ci-net-" + suffix, "ci-docker-" + suffix, "ci-work-" + suffix)
     try:
         run(["docker", "build", "--build-arg", "NODE_IMAGE=" + images["node"],
-             "--build-arg", "DOCKER_CLI_IMAGE=" + images["docker_cli"], "-t", tag, str(control)], log, timeout=180)
+             "--build-arg", "DOCKER_CLI_IMAGE=" + images["docker_cli"],
+             "--build-arg", "PNPM_VERSION=" + pnpm, "-t", tag, str(control)], log, timeout=180)
         run(["docker", "network", "create", network], log)
         run(["docker", "run", "-d", "--privileged", "--name", daemon, "--network", network,
              "--network-alias", "docker", "--memory", "3g", "--cpus", "2", "--pids-limit", "1024",
