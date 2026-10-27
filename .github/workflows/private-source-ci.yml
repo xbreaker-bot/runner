@@ -13,7 +13,7 @@ on:
         required: true
         default: s00
         type: choice
-        options: [s00]
+        options: [s00,agent-memory]
   repository_dispatch:
     types: [private-source-ci]
 
